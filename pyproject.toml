@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snapshot"
+version = "0.0.1"
+description = "Take snapshots in napari"
+authors = [{ name = "Peter Newstein" }]
+readme = "README.md"
+
+[tool.setuptools]
+py-modules = ["snapshot"]
