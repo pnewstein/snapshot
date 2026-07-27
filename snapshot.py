@@ -2,13 +2,14 @@ from dataclasses import dataclass, asdict
 import json
 from pathlib import Path
 
+import numpy as np
 from napari.layers.image._image_constants import InterpolationStr
 from napari.layers import Image, Points
 from napari.viewer import Viewer
 from napari_scripts import get_random_viewer, get_viewer_from_file
 import napari
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class LayerSnapshot:
     name: str
     visable: bool
@@ -48,7 +49,8 @@ class LayerSnapshot:
         layer.projection_mode = self.projection_mode
         layer.interpolation2d = self.interpolation
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(slots=True)
 class PointsSnapshot:
     name: str
     visable: bool
@@ -59,7 +61,6 @@ class PointsSnapshot:
     border_width: list[float]
     size: list[float]
     data: list[list[float]]
-
 
     @classmethod
     def fromImage(cls, layer: Points):
@@ -91,15 +92,16 @@ class PointsSnapshot:
         return layer
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Snapshot2D:
     file_name: str
     scene_index: int
     z_dim: tuple[float, ...]
     order: tuple[int, ...]
-    thickness: tuple[float, ...]
-    layers: tuple[LayerSnapshot, ...]
-    points: tuple[PointsSnapshot, ...]
+    margin_left: tuple[float, ...]
+    margin_right: tuple[float, ...]
+    layers: list[LayerSnapshot]
+    points: list[PointsSnapshot]
 
     def save(self, path: Path):
         """
@@ -107,56 +109,54 @@ class Snapshot2D:
         """
         path.write_text(json.dumps(asdict(self)))
 
-    def take_snapshot(self, path: Path, top_scalebar=True, viewer: Viewer | None = None):
-        close_viewer = True
-        if viewer is None:
-            viewer = self.get_viewer()
-            close_viewer = False
-        viewer.scale_bar.visible = True
+    def take_snapshot(
+        self, path: Path, top_scalebar=True, viewer: Viewer | None = None
+    ):
+        viewer_nnul = viewer if viewer is not None else self.get_viewer()
+        viewer_nnul.scale_bar.visible = True
         if top_scalebar:
-            viewer.scale_bar.position = "top_left"
-        viewer.window.export_figure(str(path))
-        viewer.scale_bar.visible = False
-        viewer.window.export_figure(str(path.with_suffix(".nscale.png")))
-        if close_viewer:
-            viewer.close()
+            viewer_nnul.scale_bar.position = "top_left"
+        viewer_nnul.window.export_figure(str(path))
+        viewer_nnul.scale_bar.visible = False
+        viewer_nnul.window.export_figure(str(path.with_suffix(".nscale.png")))
+        if viewer is None:
+            viewer_nnul.close()
 
     @classmethod
     def load(cls, path: Path):
         data = json.loads(path.read_text())
+        if "margin_left" not in data:
+            data["margin_left"] = tuple(t / 2 for t in data["thickness"])
+            data["margin_right"] = data["margin_left"]
         return cls(
             file_name=data["file_name"],
             scene_index=data["scene_index"],
             z_dim=tuple(data["z_dim"]),
             order=tuple(data["order"]),
-            thickness=tuple(data["thickness"]),
-            layers=tuple(LayerSnapshot(**d) for d in data["layers"]),
-            points=tuple(PointsSnapshot(**d) for d in data["points"])
+            margin_left=tuple(data["margin_left"]),
+            margin_right=tuple(data["margin_right"]),
+            layers=list(LayerSnapshot(**d) for d in data["layers"]),
+            points=list(PointsSnapshot(**d) for d in data["points"]),
         )
 
     @classmethod
     def fromViewer(cls, viewer: napari.Viewer):
         layer = next(l for l in viewer.layers if isinstance(l, Image))
-        ml = np.array(viewer.dims.margin_left)
-        mr = np.array(viewer.dims.margin_right)
-        thickness = mr + ml
-        d_dim = mr-ml
-        viewer.dims.thickness = thickness
-        viewer.dims.point = np.array(viewer.dims.point) + d_dim
-        
+
         assert layer.source.path is not None
         return cls(
             file_name=layer.source.path,
             scene_index=layer.metadata["scene_index"],
             z_dim=tuple(float(p) for p in viewer.dims.point),
             order=viewer.dims.order,
-            thickness=viewer.dims.thickness,
-            layers=tuple(
+            margin_left=viewer.dims.margin_left,
+            margin_right=viewer.dims.margin_right,
+            layers=list(
                 LayerSnapshot.fromImage(l)
                 for l in viewer.layers
                 if isinstance(l, Image)
             ),
-            points=tuple(
+            points=list(
                 PointsSnapshot.fromImage(l)
                 for l in viewer.layers
                 if isinstance(l, Points)
@@ -173,7 +173,8 @@ class Snapshot2D:
             viewer = get_viewer_from_file(Path(self.file_name), self.scene_index)
         viewer.dims.point = self.z_dim
         viewer.dims.order = self.order
-        viewer.dims.thickness = self.thickness
+        viewer.dims.margin_left = self.margin_left
+        viewer.dims.margin_right = self.margin_right
         layer_names = set(s.name for s in self.layers)
         viewer_names = set(l.name for l in viewer.layers)
         names_to_delete = viewer_names - layer_names
@@ -184,3 +185,5 @@ class Snapshot2D:
         for points_snap in self.points:
             points_snap.create_layer(viewer)
         return viewer
+
+
